@@ -1,0 +1,135 @@
+Запуск нескольких экземпляров OpenSSH на одном сервере
+инструкции
+Почему вы хотите запускать несколько экземпляров OpenSSH на одном сервере? Один общий ответ должен иметь внутренние и внешние экземпляры SSH. Это каждый из них может иметь различные конфигурации и безопасность.
+
+Я использую Ubuntu 10.04 для этого руководства, некоторые вещи могут отличаться на другом распределении Linux.
+
+Binary
+Первым шагом является создание символической ссылки на SSHD, который находится в /usr/sbin/sshd. Создавая символическую ссылку, sshd сможет автоматически обновляться, когда OpenSSH поддерживает это обновление.
+
+Следующая команда создаст символическую ссылку на SSHD в том же каталоге, что и исходный двочный файл
+
+sudo ls -s /usr/sbin/sshd /usr/sbin/sshd2
+
+конфигурация
+Второй шаг заключается в создании копии исходного файла конфигурации, который находится в /etc/ssh/sshd_config. Создавая копию, мы можем установить различные параметры для каждого из экземпляров sshd.
+
+Следующая команда создаст копию исходного файла конфигурации sshd в том же каталоге.
+
+sudo cp /etc/ssh/sshd_config /etc/ssh/sshd2_config
+
+Теперь нам нужно отредактировать новый файл конфигурации, так чтобы второй экземпляр конфигурации sshd имел другой порт от оригинала.
+
+Следующая команда откроет новый файл конфигурации sshd для редактирования в vi.
+
+sudo vi /etc/ssh/sshd2_config
+
+Для того, чтобы новый экземпляр sshd настроить на другой порт, измените следующую строку в файл конфигурации, чтобы отразить строку ниже (изменения выделены жирным шрифтом).
+
+Port 2222
+
+Инициализация сценария
+
+Третий шаг, нужно создать копию сценария инициализации sshd, который находится в “/etc/init.d/ssh”.
+
+sudo cp /etc/init.d/ssh /etc/init.d/ssh2
+Некоторые модификации должны быть сделаны к инициализации сценария SSH для того, чтобы сделать его ссылки и загружать экземпляры sshd. Измените новый сценарий инициализации SSH, как показано ниже (изменения, выделенные полужирным шрифтом).
+
+test -x /usr/sbin/sshd2 || exit 0
+( /usr/sbin/sshd2 -\? 2>&1 | grep -q OpenSSH ) 2> /dev/null || exit 0
+
+check_for_no_start() {
+    if [ -e /etc/ssh/sshd2_not_to_be_run ]; then 
+    if ! run_by_init; then
+        log_action_msg "OpenBSD Secure Shell сервер не используется (/etc/ssh/sshd2_not_to_be_run)"
+    fi
+}
+
+check_privsep_dir() {
+    if [ ! -d /var/run/sshd2 ]; then
+    mkdir /var/run/sshd2
+    chmod 0755 /var/run/sshd2
+    fi
+}
+
+check_config() {
+    if [ ! -e /etc/ssh/sshd2_not_to_be_run ]; then
+    /usr/sbin/sshd2 $SSHD_OPTS -t || exit 1
+    fi
+}
+
+case "$1" in
+  start)
+    if start-stop-daemon --start --quiet --oknodo --pidfile /var/run/sshd2.pid --exec /usr/sbin/sshd2 -- -f /etc/ssh/sshd2_config $SSHD_OPTS; then
+        log_end_msg 0
+    else
+        log_end_msg 1
+    fi
+    ;;
+  stop)
+    if start-stop-daemon --stop --quiet --oknodo --pidfile /var/run/sshd2.pid; then
+        log_end_msg 0
+    else
+        log_end_msg 1
+    fi
+    ;;
+
+  reload|force-reload)
+    if start-stop-daemon --stop --signal 1 --quiet --oknodo --pidfile /var/run/sshd2.pid --exec /usr/sbin/sshd2 -- -f /etc/ssh/sshd2_config; then
+        log_end_msg 0
+    else
+        log_end_msg 1
+    fi
+    ;;
+
+  restart)
+    start-stop-daemon --stop --quiet --oknodo --retry 30 --pidfile /var/run/sshd2.pid
+    if start-stop-daemon --start --quiet --oknodo --pidfile /var/run/sshd2.pid --exec /usr/sbin/sshd2 -- -f /etc/ssh/sshd2_config $SSHD_OPTS; then
+        log_end_msg 0
+    else
+        log_end_msg 1
+    fi
+    ;;
+
+  try-restart)
+    start-stop-daemon --stop --quiet --retry 30 --pidfile /var/run/sshd2.pid
+    case $RET in
+        if start-stop-daemon --start --quiet --oknodo --pidfile /var/run/sshd2.pid --exec /usr/sbin/sshd2 -- -f /etc/ssh/sshd2_config $SSHD_OPTS; then
+            log_end_msg 0
+        else
+            log_end_msg 1
+        fi
+    esac
+    ;;
+
+  status)
+    status_of_proc -p /var/run/sshd2.pid /usr/sbin/sshd2 sshd2 && exit 0 || exit $?
+    ;;
+
+  *)
+    log_action_msg "Используйте: /etc/init.d/ssh2 {start|stop|reload|force-reload|restart|try-restart|status}"
+    exit 1
+esac
+
+iptables
+Теперь вы должны убедиться, что вы открыли порт в брандмауэре для новых экземпляров sshd.
+
+Эта команда откроет порт 2222 в IPTables для входящих TCP-трафика.
+
+sudo iptables -A INPUT -p tcp --dport 2222 -j ACCEPT
+
+Start
+Теперь настало время, чтобы запустить новые экземпляры SSHD
+
+Эта команда запустит новый ssh2 инициализации сценария.
+
+sudo /etc/init.d/ssh2 start
+
+В заключении
+Если все прошло успешно, вы будете иметь две запущенные экземпляры SSHD (sshd и sshd2). Вы можете проверить это, посмотрев на запущенные процессы.
+
+Эта команда покажет запущенные процессы, которые имеют “ssh” в их названии.
+
+ps -e | grep ssh
+
+Вы должны увидеть “sshd” и “sshd2″ на выходе выше команды. Если вы этого не сделаете, то дважды проверьте, что вы не пропустите шаг. Вы также можете проверить файлы журналов.
